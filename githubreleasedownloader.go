@@ -1,15 +1,22 @@
 package githubreleasedownloader
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -118,7 +125,7 @@ func sha256sum(r io.Reader) (string, error) {
 	if _, err := io.Copy(h, r); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (c *Client) get(url string) (*http.Response, error) {
@@ -256,4 +263,137 @@ type releaseInfo struct {
 		Eyes       int    `json:"eyes"`
 	} `json:"reactions"`
 	MentionsCount int `json:"mentions_count"`
+}
+
+// DownloadAndExtractAssetToDir downloads the given asset to the given directory.
+// If the SHA256 checksum of the downloaded file does not match the one stored
+// in the asset, an error is returned.
+func DownloadAndExtractAssetToDir(asset Asset, dir string) error {
+	resp, err := http.Get(asset.URL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code %d", resp.StatusCode)
+	}
+	// Write archive to a temporary file.
+	tmp, err := ioutil.TempFile("", "*"+asset.Name)
+	if err != nil {
+		return err
+	}
+	defer tmp.Close()
+	defer os.Remove(tmp.Name())
+
+	h := sha256.New()
+	w := io.MultiWriter(tmp, h)
+
+	_, err = io.Copy(w, resp.Body)
+	if err != nil {
+		return err
+	}
+
+	// Compare the sha256 checksum of the downloaded file with the one stored.
+
+	if hex.EncodeToString(h.Sum(nil)) != asset.Sha256 {
+		return fmt.Errorf("sha256 checksum mismatch")
+	}
+
+	// Extract archive.
+	return extractArchive(tmp.Name(), dir)
+
+}
+
+// extractArchive extracts the given archive to the given directory.
+func extractArchive(archive, dir string) error {
+	if strings.HasSuffix(archive, ".zip") {
+		return extractZip(archive, dir)
+	}
+	if strings.HasSuffix(archive, ".tar.gz") || strings.HasSuffix(archive, ".tgz") {
+		return extractTarGz(archive, dir)
+	}
+	return fmt.Errorf("unsupported archive format: %s", archive)
+
+}
+
+func extractZip(archiveFilename, dir string) error {
+	archive, err := zip.OpenReader(archiveFilename)
+	if err != nil {
+		return err
+	}
+	for _, f := range archive.File {
+		filename := filepath.Join(dir, f.Name)
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(filename, os.ModePerm); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(filename), os.ModePerm); err != nil {
+			return err
+		}
+		if err := func() error {
+			dst, err := os.Create(filename)
+			if err != nil {
+				return err
+			}
+			src, err := f.Open()
+			if err != nil {
+				return err
+			}
+			defer src.Close()
+			defer dst.Close()
+			_, err = io.Copy(dst, src)
+			return err
+
+		}(); err != nil {
+			return err
+		}
+
+	}
+	return nil
+}
+
+func extractTarGz(filename, dir string) error {
+	f, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gzr, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gzr.Close()
+	tr := tar.NewReader(gzr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		filename := filepath.Join(dir, hdr.Name)
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(filename, os.ModePerm); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(filename), os.ModePerm); err != nil {
+				return err
+			}
+			dst, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+			defer dst.Close()
+			if _, err := io.Copy(dst, tr); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
