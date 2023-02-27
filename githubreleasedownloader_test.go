@@ -1,6 +1,7 @@
 package githubreleasedownloader
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -8,6 +9,10 @@ import (
 )
 
 func TestGetRelease(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		// TODO(bep) fix this (GH token).
+		t.Skip("skipping test in CI")
+	}
 	c := qt.New(t)
 
 	g, err := New()
