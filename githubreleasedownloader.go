@@ -269,6 +269,12 @@ type releaseInfo struct {
 // If the SHA256 checksum of the downloaded file does not match the one stored
 // in the asset, an error is returned.
 func DownloadAndExtractAssetToDir(asset Asset, dir string) error {
+	checksumFile := asset.Name + "." + asset.Sha256
+	// Check if the asset has already been downloaded.
+	if _, err := os.Stat(filepath.Join(dir, checksumFile)); err == nil {
+		return nil
+	}
+
 	resp, err := http.Get(asset.URL)
 	if err != nil {
 		return err
@@ -300,7 +306,18 @@ func DownloadAndExtractAssetToDir(asset Asset, dir string) error {
 	}
 
 	// Extract archive.
-	return extractArchive(tmp.Name(), dir)
+	if err := extractArchive(tmp.Name(), dir); err != nil {
+		return err
+	}
+
+	// Create checksum file.
+	f, err := os.Create(filepath.Join(dir, checksumFile))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return nil
 
 }
 
