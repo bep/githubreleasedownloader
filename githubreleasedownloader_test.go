@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,7 +36,11 @@ func TestDownloadAndExtractAssetTarGz(t *testing.T) {
 	// README.md, helloworld, helloworld_0.5.0_linux-amd64.tar.gz.ba9afe713027e4fc0be39856716d4341d10689c6a3447974296843aa147ea0bd
 	c.Assert(dirnames, qt.HasLen, 3)
 	s := ls(dirnames)
-	c.Assert(s, qt.Equals, "-rw-r--r-- 0644 README.md\n-rwxr-xr-x 0755 helloworld\n-rw-r--r-- 0644 helloworld_0_5_0_linux-amd64_tar_gz_ba9afe713027e4fc0be39856716d4341d10689c6a3447974296843aa147ea0bd\n")
+	if isWindows() {
+		c.Assert(s, qt.Equals, "-rw-rw-rw- 0666 README.md\n-rw-rw-rw- 0666 helloworld\n-rw-rw-rw- 0666 helloworld_0_5_0_linux-amd64_tar_gz_ba9afe713027e4fc0be39856716d4341d10689c6a3447974296843aa147ea0bd\n")
+	} else {
+		c.Assert(s, qt.Equals, "-rw-r--r-- 0644 README.md\n-rwxr-xr-x 0755 helloworld\n-rw-r--r-- 0644 helloworld_0_5_0_linux-amd64_tar_gz_ba9afe713027e4fc0be39856716d4341d10689c6a3447974296843aa147ea0bd\n")
+	}
 }
 
 func TestDownloadAndExtractAssetZip(t *testing.T) {
@@ -54,7 +59,11 @@ func TestDownloadAndExtractAssetZip(t *testing.T) {
 	c.Assert(dirnames, qt.HasLen, 3)
 	s := ls(dirnames)
 	// https://github.com/golang/go/issues/41809
-	c.Assert(s, qt.Equals, "-rw-r--r-- 0644 README.md\n-rw-r--r-- 0644 helloworld.exe\n-rw-r--r-- 0644 helloworld_0_5_0_windows-amd64_zip_07e933f0153020c64c8b38d563e47c34ea5c27fe1312ac3b8e9861e9da98e245\n")
+	if isWindows() {
+		c.Assert(s, qt.Equals, "-rw-rw-rw- 0666 README.md\n-rw-rw-rw- 0666 helloworld.exe\n-rw-rw-rw- 0666 helloworld_0_5_0_windows-amd64_zip_07e933f0153020c64c8b38d563e47c34ea5c27fe1312ac3b8e9861e9da98e245\n")
+	} else {
+		c.Assert(s, qt.Equals, "-rw-r--r-- 0644 README.md\n-rw-r--r-- 0644 helloworld.exe\n-rw-r--r-- 0644 helloworld_0_5_0_windows-amd64_zip_07e933f0153020c64c8b38d563e47c34ea5c27fe1312ac3b8e9861e9da98e245\n")
+	}
 }
 
 func TestDownloadAndExtractAssetToSubDirectory(t *testing.T) {
@@ -77,7 +86,11 @@ func TestDownloadAndExtractAssetToSubDirectory(t *testing.T) {
 	c.Assert(dirnames, qt.HasLen, 2)
 
 	s := ls(dirnames)
-	c.Assert(s, qt.Equals, "-rw-r--r-- 0644 README.md\n-rwxr-xr-x 0755 helloworld\n")
+	if isWindows() {
+		c.Assert(s, qt.Equals, "-rw-rw-rw- 0666 README.md\n-rw-rw-rw- 0666 helloworld\n")
+	} else {
+		c.Assert(s, qt.Equals, "-rw-r--r-- 0644 README.md\n-rwxr-xr-x 0755 helloworld\n")
+	}
 }
 
 func TestDownloadAndExtractAssetWithFilter(t *testing.T) {
@@ -109,7 +122,6 @@ func getAsset(c *qt.C, suffix string) Asset {
 		return strings.HasSuffix(a.Name, suffix)
 	})[0]
 	return linuxTarGz
-
 }
 
 func ls(dirs []os.DirEntry) string {
@@ -122,4 +134,8 @@ func ls(dirs []os.DirEntry) string {
 		fmt.Fprintf(&sb, "%s %04o %s\n", fi.Mode(), fi.Mode().Perm(), fi.Name())
 	}
 	return sb.String()
+}
+
+func isWindows() bool {
+	return runtime.GOOS == "windows"
 }

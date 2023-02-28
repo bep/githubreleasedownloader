@@ -352,7 +352,6 @@ func DownloadAndExtractAsset(asset Asset, opts DownloadAssetOptions) (DownloadAs
 	}
 
 	return res, nil
-
 }
 
 // extractArchive extracts the given archive to the given directory.
@@ -364,7 +363,6 @@ func extractArchive(archive, dir string, filter func(filename string, isDir bool
 		return extractTarGz(archive, dir, filter)
 	}
 	return fmt.Errorf("unsupported archive format: %s", archive)
-
 }
 
 func extractZip(archiveFilename, dir string, filter func(filename string, isDir bool) bool) error {
@@ -400,7 +398,6 @@ func extractZip(archiveFilename, dir string, filter func(filename string, isDir 
 			defer dst.Close()
 			_, err = io.Copy(dst, src)
 			return err
-
 		}(); err != nil {
 			return err
 		}
