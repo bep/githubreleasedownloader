@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -265,28 +264,61 @@ type releaseInfo struct {
 	MentionsCount int `json:"mentions_count"`
 }
 
-// DownloadAndExtractAssetToDir downloads the given asset to the given directory.
+type (
+	DownloadAssetOptions struct {
+		TargetBaseDir         string
+		ExtractToSubDirectory bool
+		ExtractFilter         func(filename string, isDir bool) bool
+	}
+
+	DownloadAssetsResult struct {
+		TargetDir string
+	}
+)
+
+// DownloadAndExtractAsset downloads and extracts the given asset to the given directory.
 // If the SHA256 checksum of the downloaded file does not match the one stored
 // in the asset, an error is returned.
-func DownloadAndExtractAssetToDir(asset Asset, dir string) error {
-	checksumFile := asset.Name + "." + asset.Sha256
+func DownloadAndExtractAsset(asset Asset, opts DownloadAssetOptions) (DownloadAssetsResult, error) {
+	var res DownloadAssetsResult
+
+	checksumFilename := strings.ReplaceAll(asset.Name, ".", "_") + "_" + asset.Sha256
+	targetDir := opts.TargetBaseDir
+	if opts.ExtractToSubDirectory {
+		targetDir = filepath.Join(targetDir, checksumFilename)
+	}
+	extractFilter := opts.ExtractFilter
+	if extractFilter == nil {
+		extractFilter = func(filename string, isDir bool) bool {
+			return true
+		}
+	}
+
+	res.TargetDir = targetDir
+
 	// Check if the asset has already been downloaded.
-	if _, err := os.Stat(filepath.Join(dir, checksumFile)); err == nil {
-		return nil
+	if opts.ExtractToSubDirectory {
+		if _, err := os.Stat(targetDir); err == nil {
+			return res, nil
+		}
+	} else {
+		if _, err := os.Stat(filepath.Join(targetDir, checksumFilename)); err == nil {
+			return res, nil
+		}
 	}
 
 	resp, err := http.Get(asset.URL)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code %d", resp.StatusCode)
+		return res, fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
 	// Write archive to a temporary file.
-	tmp, err := ioutil.TempFile("", "*"+asset.Name)
+	tmp, err := os.CreateTemp("", "*"+asset.Name)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer tmp.Close()
 	defer os.Remove(tmp.Name())
@@ -296,51 +328,57 @@ func DownloadAndExtractAssetToDir(asset Asset, dir string) error {
 
 	_, err = io.Copy(w, resp.Body)
 	if err != nil {
-		return err
+		return res, err
 	}
 
 	// Compare the sha256 checksum of the downloaded file with the one stored.
 
 	if hex.EncodeToString(h.Sum(nil)) != asset.Sha256 {
-		return fmt.Errorf("sha256 checksum mismatch")
+		return res, fmt.Errorf("sha256 checksum mismatch")
 	}
 
 	// Extract archive.
-	if err := extractArchive(tmp.Name(), dir); err != nil {
-		return err
+	if err := extractArchive(tmp.Name(), targetDir, extractFilter); err != nil {
+		return res, err
 	}
 
-	// Create checksum file.
-	f, err := os.Create(filepath.Join(dir, checksumFile))
-	if err != nil {
-		return err
+	if !opts.ExtractToSubDirectory {
+		// Create checksum file.
+		f, err := os.Create(filepath.Join(targetDir, checksumFilename))
+		if err != nil {
+			return res, err
+		}
+		defer f.Close()
 	}
-	defer f.Close()
 
-	return nil
+	return res, nil
 
 }
 
 // extractArchive extracts the given archive to the given directory.
-func extractArchive(archive, dir string) error {
+func extractArchive(archive, dir string, filter func(filename string, isDir bool) bool) error {
 	if strings.HasSuffix(archive, ".zip") {
-		return extractZip(archive, dir)
+		return extractZip(archive, dir, filter)
 	}
 	if strings.HasSuffix(archive, ".tar.gz") || strings.HasSuffix(archive, ".tgz") {
-		return extractTarGz(archive, dir)
+		return extractTarGz(archive, dir, filter)
 	}
 	return fmt.Errorf("unsupported archive format: %s", archive)
 
 }
 
-func extractZip(archiveFilename, dir string) error {
+func extractZip(archiveFilename, dir string, filter func(filename string, isDir bool) bool) error {
 	archive, err := zip.OpenReader(archiveFilename)
 	if err != nil {
 		return err
 	}
 	for _, f := range archive.File {
+		isDir := f.FileInfo().IsDir()
 		filename := filepath.Join(dir, f.Name)
-		if f.FileInfo().IsDir() {
+		if !filter(filename, isDir) {
+			continue
+		}
+		if isDir {
 			if err := os.MkdirAll(filename, os.ModePerm); err != nil {
 				return err
 			}
@@ -350,7 +388,7 @@ func extractZip(archiveFilename, dir string) error {
 			return err
 		}
 		if err := func() error {
-			dst, err := os.Create(filename)
+			dst, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(f.Mode()))
 			if err != nil {
 				return err
 			}
@@ -371,7 +409,7 @@ func extractZip(archiveFilename, dir string) error {
 	return nil
 }
 
-func extractTarGz(filename, dir string) error {
+func extractTarGz(filename, dir string, filter func(filename string, isDir bool) bool) error {
 	f, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -392,6 +430,9 @@ func extractTarGz(filename, dir string) error {
 			return err
 		}
 		filename := filepath.Join(dir, hdr.Name)
+		if !filter(filename, hdr.Typeflag == tar.TypeDir) {
+			continue
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(filename, os.ModePerm); err != nil {
